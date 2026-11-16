@@ -6,7 +6,7 @@ declare(strict_types=1);
  * Single file. Data (DB + master key) auto-created in ./garage-data/
  * CLI: php garage.php purge   (for cron)
  */
-
+const GS_DEBUG = true; // set back to false once fixed
 const GS_DATA          = __DIR__ . '/garage-data'; // ideally move ABOVE webroot
 const GS_TZ            = 'UTC';                    // e.g. 'Australia/Melbourne'
 const GS_BASE          = '';                       // optional fixed base URL, e.g. 'https://example.com/garage.php'
@@ -212,12 +212,14 @@ function scale_max(GdImage $im, int $max): GdImage {
 }
 function jpeg_of(GdImage $im, int $quality): string {
     $w = imagesx($im); $h = imagesy($im);
-    $c = imagecreatetruecolor($w, $h);
+    $c = @imagecreatetruecolor($w, $h);
+    if (!$c) throw new RuntimeException('Server ran out of memory processing a photo. Try fewer or smaller photos.');
     imagealphablending($c, true);
     imagefill($c, 0, 0, imagecolorallocate($c, 255, 255, 255));
-    imagecopy($c, $im, 0, 0, 0, $w, $h);
+    imagecopy($c, $im, 0, 0, 0, 0, $w, $h); // dst_x, dst_y, src_x, src_y, src_w, src_h
     ob_start(); imagejpeg($c, null, $quality); $d = (string)ob_get_clean();
     imagedestroy($c);
+    if ($d === '') throw new RuntimeException('Could not encode a photo.');
     return $d;
 }
 function store_photo(array $f, string $key, int $lid): void {
@@ -468,8 +470,10 @@ function act_create(): void {
         db()->commit();
     } catch (Throwable $e) {
         if (db()->inTransaction()) db()->rollBack();
-        error_log('gs create: '.$e->getMessage());
-        render_new($v, $e instanceof RuntimeException ? $e->getMessage() : 'Server error while creating the listing — check the PHP error log.');
+        error_log('gs create: '.get_class($e).': '.$e->getMessage().' @ '.$e->getFile().':'.$e->getLine());
+        $msg = $e instanceof RuntimeException ? $e->getMessage() : 'Server error while creating the listing.';
+        if (GS_DEBUG) $msg .= ' [DEBUG '.get_class($e).': '.$e->getMessage().' @ '.basename($e->getFile()).':'.$e->getLine().']';
+        render_new($v, $msg);
         return;
     }
     render_created($vt, $rt, $v, $expires);
